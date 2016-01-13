@@ -50,6 +50,8 @@
 #include "log.h"
 
 #include <private/android_filesystem_config.h>
+#include <sys/ioctl.h>
+#include "ubi-user.h"
 
 void add_environment(const char *name, const char *value);
 
@@ -391,6 +393,34 @@ int do_mkdir(int nargs, char **args)
     return 0;
 }
 
+#define UBI_CTRL_DEV "/dev/ubi_ctrl"
+int do_ubiAttach(int nargs, char **args)
+{
+    struct ubi_attach_req req;
+    int fd;
+    int ret;
+
+    ERROR("do_ubiAttach %s %s\n",args[1],args[2]);
+
+    memset(&req, 0, sizeof(struct ubi_attach_req));
+    req.ubi_num =(typeof(req.ubi_num))atoi(args[1]);
+    if(-1 == req.ubi_num){
+        req.ubi_num = UBI_DEV_NUM_AUTO;
+    }
+    req.mtd_num = (typeof(req.mtd_num))mtd_name_to_number( args[2]);
+
+    fd = open(UBI_CTRL_DEV, O_RDONLY);
+    if(-1 == fd){
+        return -1;
+    }
+    ret = ioctl(fd, UBI_IOCATT, &req);
+    close(fd);
+    if(-1 == ret){
+        return -1;
+    }
+    return 0;
+}
+
 static struct {
     const char *name;
     unsigned flag;
@@ -515,6 +545,93 @@ exit_success:
 
 }
 
+/* SPRD: add for storage manage  @{ */
+
+#define PROC_MOUNTS_FILENAME   "/proc/mounts"
+
+static int enusure_data_mounted()
+{
+    char buf[2048];
+    const char *bufp;
+    int fd;
+    ssize_t nbytes;
+    int res = -1;
+
+    /* Open and read the file contents.
+     */
+    fd = open(PROC_MOUNTS_FILENAME, O_RDONLY);
+    if (fd < 0) {
+        goto bail;
+    }
+    nbytes = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (nbytes < 0) {
+        goto bail;
+    }
+    buf[nbytes] = '\0';
+
+    /* Parse the contents of the file, which looks like:
+     *
+     *     # cat /proc/mounts
+     *     rootfs / rootfs rw 0 0
+     *     /dev/pts /dev/pts devpts rw 0 0
+     *     /proc /proc proc rw 0 0
+     *     /sys /sys sysfs rw 0 0
+     *     /dev/block/mtdblock4 /system yaffs2 rw,nodev,noatime,nodiratime 0 0
+     *     /dev/block/mtdblock5 /data yaffs2 rw,nodev,noatime,nodiratime 0 0
+     *     /dev/block/mmcblk0p1 /sdcard vfat rw,sync,dirsync,fmask=0000,dmask=0000,codepage=cp437,iocharset=iso8859-1,utf8 0 0
+     *
+     * The zeroes at the end are dummy placeholder fields to make the
+     * output match Linux's /etc/mtab, but don't represent anything here.
+     */
+    bufp = buf;
+    while (nbytes > 0) {
+        char device[64];
+        char mount_point[64];
+        char filesystem[64];
+        char flags[128];
+        int matches;
+
+        /* %as is a gnu extension that malloc()s a string for each field.
+         */
+        matches = sscanf(bufp, "%63s %63s %63s %127s",
+                         device, mount_point, filesystem, flags);
+
+        if (matches == 4) {
+            device[sizeof(device)-1] = '\0';
+            mount_point[sizeof(mount_point)-1] = '\0';
+            filesystem[sizeof(filesystem)-1] = '\0';
+            flags[sizeof(flags)-1] = '\0';
+
+            if (!strncmp(mount_point, DATA_MNT_POINT, sizeof(DATA_MNT_POINT))) {
+                res = 0;
+                ERROR("/data mounted\n");
+                break;
+            }
+        } else {
+            ERROR("matches was %d on <<%.40s>>\n", matches, bufp);
+        }
+
+        /* Eat the line.
+         */
+        while (nbytes > 0 && *bufp != '\n') {
+            bufp++;
+            nbytes--;
+        }
+        if (nbytes > 0) {
+            bufp++;
+            nbytes--;
+        }
+    }
+
+    return res;
+
+bail:
+//TODO: free the strings we've allocated.
+    return res;
+}
+/* @} */
+
 int do_mount_all(int nargs, char **args)
 {
     pid_t pid;
@@ -562,12 +679,19 @@ int do_mount_all(int nargs, char **args)
     if (ret == 1) {
         property_set("ro.crypto.state", "encrypted");
         property_set("vold.decrypt", "1");
+/* SPRD: modify for storage manage  @{
+  @orig
     } else if (ret == 0) {
+ */
+    } else {
+        if (ret == 0 || !enusure_data_mounted()) {
+/* @} */
         property_set("ro.crypto.state", "unencrypted");
         /* If fs_mgr determined this is an unencrypted device, then trigger
          * that action.
          */
         action_for_each_trigger("nonencrypted", action_add_queue_tail);
+        }
     }
 
     return ret;
@@ -967,4 +1091,14 @@ int do_wait(int nargs, char **args)
         return wait_for_file(args[1], atoi(args[2]));
     } else
         return -1;
+}
+
+int do_pipe(int nargs, char **args) {
+    mode_t mode = get_mode(args[1]);
+    if (mkfifo(args[2], mode) < 0) {
+	ERROR("peter do pipe error haha\n");
+        return -errno;
+    }
+    return 0;
+
 }
