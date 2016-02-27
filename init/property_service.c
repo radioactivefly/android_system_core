@@ -72,6 +72,7 @@ struct {
     { "net.lte",          AID_RADIO,    0 },
     { "net.cdma",         AID_RADIO,    0 },
     { "ril.",             AID_RADIO,    0 },
+    { "ril.",             AID_SYSTEM,   0 },
     { "gsm.",             AID_RADIO,    0 },
     { "persist.radio",    AID_RADIO,    0 },
     { "net.dns",          AID_RADIO,    0 },
@@ -439,8 +440,8 @@ void handle_property_set_fd()
             if (check_perms(msg.name, cr.uid, cr.gid, source_ctx)) {
                 property_set((char*) msg.name, (char*) msg.value);
             } else {
-                ERROR("sys_prop: permission denied uid:%d  name:%s\n",
-                      cr.uid, msg.name);
+                ERROR("sys_prop: permission denied pid:%d uid:%d name:%s\n",
+                      cr.pid, cr.uid, msg.name);
             }
 
             // Note: bionic's property client code assumes that the
